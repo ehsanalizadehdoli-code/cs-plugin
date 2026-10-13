@@ -1,0 +1,8 @@
+name: CommunityService
+version: 1.0
+main: ir.cs.CSPlugin
+api-version: "1.21"
+commands:
+  cs:
+    description: Community Service (OP only)
+    usage: /cs <player> <amount> <reason>
