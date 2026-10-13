@@ -3,6 +3,11 @@ package ir.cs;
 import net.kyori.adventure.text.Component;
 import org.bukkit.*;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.block.Block;
 import org.bukkit.command.*;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -46,6 +51,7 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
         int successes = 0;
         boolean showing = true;
         List<BukkitTask> tasks = new ArrayList<>();
+        Inventory inv; // فقط در حالت پنل
     }
 
     private final Map<UUID, Jail> jailed = new HashMap<>();
@@ -102,6 +108,18 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
     }
 
     // ====== کمک‌ها ======
+    // حالت مینی‌هک: gui = پنل (پیش‌فرض) ، world = بلاک‌های واقعی
+    private boolean isGui() { return !"world".equalsIgnoreCase(getConfig().getString("mode", "gui")); }
+    private static final int[] SLOTS = {10, 12, 14, 16};
+
+    private ItemStack panelItem(Material m, int i) {
+        ItemStack it = new ItemStack(m);
+        ItemMeta meta = it.getItemMeta();
+        meta.setDisplayName(m == WHITE ? "§7؟" : COLOR_NAMES[i]);
+        it.setItemMeta(meta);
+        return it;
+    }
+
     private Location spawn() { return getConfig().getLocation("spawn"); }
     private Location hackBlock(int i) { return getConfig().getLocation("hack." + i); }
 
@@ -183,7 +201,7 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (spawn() == null || getConfig().getLocation("pos1") == null || getConfig().getLocation("pos2") == null) {
             msg(sender, "§cاول مکان CS رو ست کن: /cs setspawn, /cs pos1, /cs pos2"); return true;
         }
-        for (int i = 0; i < 4; i++) if (hackBlock(i) == null) { msg(sender, "§cبلاک‌های هک ست نشدن: /cs sethack 1..4"); return true; }
+        if (!isGui()) for (int i = 0; i < 4; i++) if (hackBlock(i) == null) { msg(sender, "§cبلاک‌های هک ست نشدن: /cs sethack 1..4"); return true; }
 
         Jail j = jailed.get(t.getUniqueId());
         if (j != null) {
@@ -262,12 +280,26 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (sessions.containsKey(p.getUniqueId())) return;
         Session s = new Session();
         sessions.put(p.getUniqueId(), s);
+        if (isGui()) {
+            s.inv = Bukkit.createInventory(null, 27, "§c§lهک");
+            ItemStack filler = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
+            ItemMeta fm = filler.getItemMeta();
+            fm.setDisplayName(" ");
+            filler.setItemMeta(fm);
+            for (int i = 0; i < 27; i++) s.inv.setItem(i, filler);
+            p.openInventory(s.inv);
+        }
         for (int i = 0; i < 4; i++) show(p, i, WHITE);
         p.sendTitle("§c§lهک", "§7ترتیب رنگ‌ها رو یادت بمونه...", 5, 30, 5);
         s.tasks.add(Bukkit.getScheduler().runTaskLater(this, () -> newRound(p), 40L));
     }
 
     private void show(Player p, int i, Material m) {
+        if (isGui()) {
+            Session s = sessions.get(p.getUniqueId());
+            if (s != null && s.inv != null) s.inv.setItem(SLOTS[i], panelItem(m, i));
+            return;
+        }
         Location l = hackBlock(i);
         if (l != null) p.sendBlockChange(l, m.createBlockData());
     }
@@ -342,10 +374,15 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     private void endSession(Player p) {
         Session s = sessions.remove(p.getUniqueId());
-        if (s != null) s.tasks.forEach(BukkitTask::cancel);
-        for (int i = 0; i < 4; i++) {
-            Location l = hackBlock(i);
-            if (l != null) p.sendBlockChange(l, l.getBlock().getBlockData());
+        if (s != null) {
+            s.tasks.forEach(BukkitTask::cancel);
+            if (s.inv != null) p.closeInventory();
+        }
+        if (!isGui()) {
+            for (int i = 0; i < 4; i++) {
+                Location l = hackBlock(i);
+                if (l != null) p.sendBlockChange(l, l.getBlock().getBlockData());
+            }
         }
     }
 
@@ -377,6 +414,23 @@ public class CSPlugin extends JavaPlugin implements Listener, TabExecutor {
         } else if (e.getAction() == Action.RIGHT_CLICK_BLOCK && isWorkBlock(b)) {
             startHack(p);
         }
+    }
+
+    @EventHandler
+    public void onPanelClick(InventoryClickEvent e) {
+        if (!(e.getWhoClicked() instanceof Player p)) return;
+        Session s = sessions.get(p.getUniqueId());
+        if (s == null || s.inv == null || !e.getView().getTopInventory().equals(s.inv)) return;
+        e.setCancelled(true);
+        if (e.getClickedInventory() == null || !e.getClickedInventory().equals(s.inv)) return;
+        for (int i = 0; i < 4; i++) if (SLOTS[i] == e.getSlot()) handleHackClick(p, i);
+    }
+
+    @EventHandler
+    public void onPanelClose(InventoryCloseEvent e) {
+        if (!(e.getPlayer() instanceof Player p)) return;
+        Session s = sessions.get(p.getUniqueId());
+        if (s != null && s.inv != null && e.getInventory().equals(s.inv)) endSession(p);
     }
 
     @EventHandler
